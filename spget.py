@@ -65,7 +65,7 @@ def load_repeats(filename):
                 warn("malformed line: \n" + line + "\nskipping...")
                 continue
             sys, repeat_raw, mm_pre = line.split("\t")
-            mm, ins, dl, _ = (mm_pre+",0,0,0,0").split(",",3) 
+            mm, ins, dl, _ = (mm_pre+",0,0,0,0").split(",",3)
             repeat, opn, cls = get_parts(repeat_raw)
             out[sys].update({ repeat : { "MM" : int(mm), "INS" : int(ins), "DEL" : int(dl) } })
             if opn and cls:
@@ -115,7 +115,7 @@ def fill_parts(frm, all_mm, id2primer = None):
             id2primer.update({seq_id: seq})
 
     warn("\nusing following repeats sequences:")
-    for seq in all_mm: 
+    for seq in all_mm:
         dump = "seq: " + seq + " id: " + all_mm[seq]["ID"] + " types: " + "|".join(all_mm[seq]["TYPE"]) + " mismatches: " + str(all_mm[seq]["MM"])
         warn(dump)
 
@@ -129,7 +129,7 @@ def mm_dist(s1, s2, max_dist = -1):
     for i in range(min(l1, l2)):
         if s1[i] != s2[i]:
             mm += 1
-        if check_dist and mm > max_dist: 
+        if check_dist and mm > max_dist:
             return -1
     return mm
 
@@ -175,9 +175,10 @@ def prune_matches(matches, sys):
            continue
        t_type = t[4].intersection(sys_o_c_set)
        prev_type = prev[4]
+       # append only open-close pairs
        if sys_o in prev_type and sys_c in t_type:
-          res.append(prev) 
-          res.append(t) 
+          res.append(prev)
+          res.append(t)
        prev = t
     if len(res) < 2:
         return None
@@ -196,7 +197,7 @@ def get_system_coords(seq, all_mm):
         pat_id = all_mm[pat]["ID"]
         found = fuzzy_find_seq(seq, pat, mm, ins, dl, pat_re_fuzzy, pat_type, pat_id)
         if found:
-            for sys in pat_sys: 
+            for sys in pat_sys:
                 out[sys] += found
     res = {}
     for sys in out:
@@ -224,11 +225,17 @@ def get_prm_parts(tpl, id2prm):
     return (f, t, seq_orig, mm, diff_str(seq_orig, seq), st)
 
 
-def dump_read(place, read_id, res, seq, id2prm, both_dirs = False, tag = "", qual = ""):
+def repeat_counts(arr):
+    size = len(arr)
+    for cont, cont_size in enumerate(arr):
+        for i in range(cont_size):
+            yield size, cont, cont_size, i
+
+def dump_read(place, read_id, res, seq, id2prm, both_dirs = False, tag = "", qual = "", dump_linked_ids = False):
     if not res:
         return
     systems_cnt = len(res)
-    systems = ",".join(sorted(res))
+    systems = ",".join(sorted(res.keys()))
     overlap = "F"
     if systems_cnt != 1:
         prev = None
@@ -246,11 +253,37 @@ def dump_read(place, read_id, res, seq, id2prm, both_dirs = False, tag = "", qua
         if len(coords) % 2 != 0:
             warn(" ".join(map(str(place, read_id, tag, sys, "coords not paired... skipping last not paired"))))
         total = len(coords) / 2
-        for i, pair in enumerate(zip(coords[0::2], coords[1::2])):
-             open_from, open_to, open_orig, mm, open_observed, open_type = get_prm_parts(pair[0], id2prm)
-             close_from, close_to, close_orig, mm, close_observed, close_type = get_prm_parts(pair[1], id2prm)
+
+        # deal with adjacent primers and zero-sized spacers
+        linkage_size = [0]
+        # assume that len % 2 == 0 and adding fake end
+        for start, end, new_start in zip(coords[0::2], coords[1::2], coords[2::2] + [coords[-1]]):
+            open_from, open_to, open_orig, mm, open_observed, open_type = get_prm_parts(start, id2prm)
+            close_from, close_to, close_orig, mm, close_observed, close_type = get_prm_parts(end, id2prm)
+            spacer_len = close_from - open_to
+            # nospacer case
+            if spacer_len <= 0:
+                if linkage_size[-1] != 0:
+                    linkage_size.append(0)
+                linkage_size[-1] += 1
+                linkage_size.append(0)
+                continue
+            linkage_size[-1] += 1
+            # different opening sequence
+            if end != new_start:
+                linkage_size.append(0)
+        # removing trailing 0 for empty or ending with nospacer region
+        if linkage_size[-1] == 0:
+             linkage_size.pop()
+
+        for i, pair_cont in enumerate(zip(coords[0::2], coords[1::2], repeat_counts(linkage_size))):
+             open_from, open_to, open_orig, mm, open_observed, open_type = get_prm_parts(pair_cont[0], id2prm)
+             close_from, close_to, close_orig, mm, close_observed, close_type = get_prm_parts(pair_cont[1], id2prm)
              spacer_len = close_from - open_to
              spacer = seq[open_to:close_from]
+             cont_dump = []
+             if dump_linked_ids:
+                 cont_dump = list(pair_cont[2])
              qual_dump = []
              if qual:
                  qual_dump = [
@@ -263,7 +296,7 @@ def dump_read(place, read_id, res, seq, id2prm, both_dirs = False, tag = "", qua
                 open_from, open_to, open_orig, mm, open_observed, open_type,
                 close_from, close_to, close_orig, mm, close_observed, close_type,
                 total, i, spacer_len, spacer
-             ]+ qual_dump))
+             ]+ qual_dump + cont_dump))
 
 
 def main():
@@ -281,9 +314,12 @@ def main():
     parser = ArgumentParser()
     parser.add_argument("--primers", required=True, help="tab-separated 3 cols primers file")
     parser.add_argument("--each", required=False, help="each line of how many to process, format '0/4', for parallel runs")
+    parser.add_argument("--time-each", required=False, help="report times for every TIME_EACH processed(and skipped) lines", type=int, default=50000)
+    parser.add_argument("--time-first", required=False, help="report times after TIME_FIRST initially processed / skipped lines", type=int, default=1000)
+    parser.add_argument("--dump-linked-ids", required=False, help="appends spacer ids withing linked regions (# linked regions, id of region, size of region, spacer id)", action="store_true")
     args = parser.parse_args()
 
-    part, of_parts = None, None  
+    part, of_parts = None, None
     try:
         part, of_parts = map(int, args.each.strip().split("/", 1))
     except:
@@ -299,12 +335,12 @@ def main():
     all_mm = {}
     id2primers = {}
     fill_parts(repeats, all_mm, id2primers)
-    
+
     warn("\ntrimming...")
 
     start_time = time.time()
     for cnt, line in enumerate(sys.stdin, start = 1):
-        if cnt % 50000 == 0 or cnt == 1000:
+        if cnt % args.time_each == 0 or cnt == args.time_first:
             warn("\nprocessed " + str(cnt) + " reads in " + str_time(start_time) + " ...")
         if of_parts and cnt % of_parts != part:
             continue
@@ -318,10 +354,10 @@ def main():
 
         res = get_system_coords(seq, all_mm)
         res_rc = get_system_coords(rc_seq, all_mm)
-        
+
         both_dirs = res and res_rc
-        dump_read(place, read_id, res, seq, id2primers, both_dirs, "+", qual)
-        dump_read(place, read_id, res_rc, rc_seq, id2primers, both_dirs, "-", qual)
+        dump_read(place, read_id, res, seq, id2primers, both_dirs, "+", qual, args.dump_linked_ids)
+        dump_read(place, read_id, res_rc, rc_seq, id2primers, both_dirs, "-", qual, args.dump_linked_ids)
 
     warn("\nprocessed " + str(cnt) + " reads in " + str_time(start_time) + " ...")
     warn("\ndone...")
