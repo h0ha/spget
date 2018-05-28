@@ -1,0 +1,21 @@
+#! /bin/bash
+#PBS -l nodes=2:ppn=4
+
+INPUT=test.gz
+PRIMERS=primers.txt
+
+ulimit -l unlimited
+export PATH="$PBS_O_HOME/anaconda2/bin:$PATH"
+
+cd $PBS_O_WORKDIR
+if [[ "$1" = "run" ]]; then
+    TOTAL="$(( $PBS_NUM_NODES * $PBS_NUM_PPN ))"
+    NODE_ID=${PBS_VNODENUM}
+    echo total $TOTAL node_id $NODE_ID
+    echo input $INPUT primers $PRIMERS
+    zcat ${INPUT} | python $HOME/tools/spget/spget.py --primers ${PRIMERS} --dump-linked-ids --each ${NODE_ID}/${TOTAL} 2> ${NODE_ID}_${TOTAL}.log | gzip - > ${NODE_ID}_${TOTAL}.gz
+else
+    /usr/local/bin/pbsdsh $PBS_O_WORKDIR/trim.pbs run
+fi
+
+# qsub -l nodes=2:ppn=4 -l walltime=1:00:00 trim.pbs
