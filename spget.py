@@ -9,7 +9,7 @@ from collections import defaultdict
 REPEATS = {}
 COMPL = dict(zip("ACGT", "TGCA"))
 def rc(s):
-    return "".join(map(lambda x: x in COMPL and COMPL[x] or x, s)[::-1])
+    return "".join(list(map(lambda x: x in COMPL and COMPL[x] or x, s))[::-1])
 
 
 def warn(x):
@@ -34,7 +34,7 @@ def re_disamb(seq):
     wildcards = frozenset(IUPAC_WILDCARDS.keys())
     for c in seq:
         if c in wildcards:
-            out += "[" + IUPAC_WILDCARDS[c] + "]"
+            out += "[" + "|".join(IUPAC_WILDCARDS[c]) + "]"
         else:
             out += c
     return out
@@ -59,6 +59,8 @@ def load_repeats(filename):
             if cp != -1:
                 line = line[0:cp]
             line = line.strip()
+            
+            print(line)
             if not line:
                 continue
             if line.count("\t") != 2:
@@ -99,8 +101,12 @@ def fill_parts(frm, all_mm, id2primer = None):
                 if recalc:
                     all_mm[s]["SYS"].add(sys)
                     # overlapped here or in find?
-                    regex_str = "(?:%s){s<=%d,i<=%d,d<=%d}" % (s, mm, ins, dl)
+
+                    regex_s = re_disamb(s)
+
+                    regex_str = "(?:%s){s<=%d,i<=%d,d<=%d}" % (regex_s, mm, ins, dl)
                     #regex_str = "(?:%s){s<=%d}" % (s, mm)
+
                     all_mm[s]["RE_FUZZY"] = regex.compile(regex_str, overlapped = True)
                 if s == seq:
                     all_mm[s]["TYPE"].update([sys+"(",sys+")"])
@@ -291,12 +297,12 @@ def dump_read(place, read_id, res, seq, id2prm, both_dirs = False, tag = "", qua
                      qual[close_from:close_to],
                      qual[open_to:close_from]
                  ]
-             print "\t".join(map(str, [
+             print ("\t".join(map(str, [
                 place, read_id, tag, both_dirs, systems_cnt, systems, overlap, sys,
                 open_from, open_to, open_orig, mm, open_observed, open_type,
                 close_from, close_to, close_orig, mm, close_observed, close_type,
                 total, i, spacer_len, spacer
-             ]+ qual_dump + cont_dump))
+             ]+ qual_dump + cont_dump)))
 
 
 def main():
@@ -334,6 +340,7 @@ def main():
 
     all_mm = {}
     id2primers = {}
+
     fill_parts(repeats, all_mm, id2primers)
 
     warn("\ntrimming...")
@@ -345,8 +352,10 @@ def main():
         if of_parts and cnt % of_parts != part:
             continue
 
-        rec = map(lambda x: x.strip(), line.strip().split("\t"))
+
+        rec = list(map(lambda x: x.strip(), line.strip().split("\t")))
         rec += [""]
+
         place, read_id, seq, qual = rec[0:4]
 
         rc_seq = rc(seq)
